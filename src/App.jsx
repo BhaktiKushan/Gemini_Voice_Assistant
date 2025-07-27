@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Sparkles, Brain, Zap, Volume2, VolumeX, Copy, Check, Code, MessageSquare } from 'lucide-react';
+import { Mic, MicOff, Sparkles, Brain, Zap, Volume2, VolumeX, Copy, Check, Code, MessageSquare, Send, Keyboard, Lightbulb } from 'lucide-react';
 
-// Code syntax highlighting component
 const CodeBlock = ({ children, language = 'javascript' }) => {
   const [copied, setCopied] = useState(false);
   
@@ -16,7 +15,6 @@ const CodeBlock = ({ children, language = 'javascript' }) => {
   };
 
   const highlightCode = (code) => {
-    // Simple syntax highlighting for common languages
     const keywords = ['function', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'return', 'import', 'export', 'class', 'extends', 'async', 'await', 'try', 'catch', 'throw', 'new'];
     const strings = /("[^"]*"|'[^']*'|`[^`]*`)/g;
     const comments = /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm;
@@ -24,16 +22,10 @@ const CodeBlock = ({ children, language = 'javascript' }) => {
     
     let highlighted = code;
     
-    // Highlight comments (do this first)
     highlighted = highlighted.replace(comments, '<span style="color: #6B7280; font-style: italic;">$1</span>');
-    
-    // Highlight strings
     highlighted = highlighted.replace(strings, '<span style="color: #10B981;">$1</span>');
-    
-    // Highlight numbers
     highlighted = highlighted.replace(numbers, '<span style="color: #F59E0B;">$&</span>');
     
-    // Highlight keywords
     keywords.forEach(keyword => {
       const regex = new RegExp(`\\b${keyword}\\b`, 'g');
       highlighted = highlighted.replace(regex, `<span style="color: #8B5CF6; font-weight: 600;">${keyword}</span>`);
@@ -170,17 +162,84 @@ const ResponseDisplay = ({ transcript, response, isSpeaking, onStopSpeaking }) =
   );
 };
 
+// Keywords/Suggestions Component
+const KeywordSuggestions = ({ onKeywordClick, visible }) => {
+  const keywords = [
+    { category: "Coding", items: [
+      "Write a Python function for sorting",
+      "Explain React hooks",
+      "Create a REST API example",
+      "Debug this JavaScript code",
+      "Generate CSS animations"
+    ]},
+    { category: "Creative", items: [
+      "Write a short story about space",
+      "Create a poem about nature",
+      "Generate marketing copy",
+      "Write a professional email",
+      "Create a product description"
+    ]},
+    { category: "Learning", items: [
+      "Explain quantum physics simply",
+      "Teach me about machine learning",
+      "What is blockchain technology?",
+      "How does photosynthesis work?",
+      "Explain the history of AI"
+    ]},
+    { category: "Business", items: [
+      "Create a business plan outline",
+      "Write SWOT analysis template",
+      "Generate meeting agenda",
+      "Draft project proposal",
+      "Create performance metrics"
+    ]}
+  ];
+
+  if (!visible) return null;
+
+  return (
+    <div className="w-full max-w-4xl mx-auto mt-6 bg-gradient-to-r from-slate-800/60 to-slate-700/60 backdrop-blur-sm border border-slate-600/30 rounded-xl p-6 shadow-xl">
+      <div className="flex items-center space-x-2 mb-4">
+        <Lightbulb className="w-5 h-5 text-yellow-400" />
+        <h3 className="text-yellow-300 font-semibold">Suggested Prompts</h3>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {keywords.map((category, categoryIndex) => (
+          <div key={categoryIndex} className="space-y-3">
+            <h4 className="text-sm font-medium text-slate-300 uppercase tracking-wide">{category.category}</h4>
+            <div className="space-y-2">
+              {category.items.map((keyword, index) => (
+                <button
+                  key={index}
+                  onClick={() => onKeywordClick(keyword)}
+                  className="w-full text-left px-3 py-2 text-sm bg-slate-700/50 hover:bg-slate-600/50 text-slate-200 rounded-lg transition-all duration-200 hover:scale-[1.02] hover:shadow-md border border-slate-600/30 hover:border-slate-500/50"
+                >
+                  {keyword}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const App = () => {
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [transcript, setTranscript] = useState('');
+  const [textInput, setTextInput] = useState('');
   const [response, setResponse] = useState('');
   const [error, setError] = useState('');
-  const [conversationHistory, setConversationHistory] = useState([]);
+  const [showKeywords, setShowKeywords] = useState(false);
+  const [inputMode, setInputMode] = useState('voice'); // 'voice' or 'text'
   
   const recognitionRef = useRef(null);
   const speechSynthesisRef = useRef(null);
+  const textInputRef = useRef(null);
 
   const API_KEY = "AIzaSyBC7Sw3P7Z5R-z4L9-5VcvN8Zj2NEWD7OE";
   const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
@@ -189,7 +248,7 @@ const App = () => {
   const [textIndex, setTextIndex] = useState(0);
   const texts = [
     "Your AI-Powered Assistant",
-    "Intelligent Conversations", 
+    "Voice & Text Commands", 
     "Advanced Problem Solving",
     "Creative Content Generation",
     "Code Generation & Analysis"
@@ -273,6 +332,7 @@ const App = () => {
   const sendToGemini = async (message) => {
     setIsProcessing(true);
     setError('');
+    setShowKeywords(false);
 
     try {
       const requestBody = {
@@ -301,13 +361,6 @@ const App = () => {
       if (data.candidates && data.candidates[0] && data.candidates[0].content) {
         const aiResponse = data.candidates[0].content.parts[0].text;
         setResponse(aiResponse);
-        
-        // Add to conversation history
-        setConversationHistory(prev => [...prev, 
-          { type: 'user', content: message },
-          { type: 'ai', content: aiResponse }
-        ]);
-        
         speakResponse(aiResponse);
       } else {
         throw new Error('Invalid response format from Gemini AI');
@@ -359,6 +412,8 @@ const App = () => {
         setResponse('');
         setTranscript('');
         setError('');
+        setInputMode('voice');
+        setShowKeywords(false);
         recognitionRef.current.start();
         setIsListening(true);
       } catch (permissionError) {
@@ -368,13 +423,42 @@ const App = () => {
     }
   };
 
+  const handleTextSubmit = (e) => {
+    e.preventDefault();
+    if (textInput.trim() && !isProcessing) {
+      setTranscript(textInput.trim());
+      sendToGemini(textInput.trim());
+      setTextInput('');
+    }
+  };
+
+  const handleKeywordClick = (keyword) => {
+    setTextInput(keyword);
+    setInputMode('text');
+    setShowKeywords(false);
+    if (textInputRef.current) {
+      textInputRef.current.focus();
+    }
+  };
+
+  const toggleInputMode = () => {
+    const newMode = inputMode === 'voice' ? 'text' : 'voice';
+    setInputMode(newMode);
+    setShowKeywords(newMode === 'text' && !transcript && !response);
+  };
+
   const clearConversation = () => {
     setTranscript('');
     setResponse('');
-    setConversationHistory([]);
+    setTextInput('');
     setError('');
+    setShowKeywords(inputMode === 'text');
     stopSpeaking();
   };
+
+  useEffect(() => {
+    setShowKeywords(inputMode === 'text' && !transcript && !response);
+  }, [inputMode, transcript, response]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex flex-col p-4 sm:p-6 lg:p-8 overflow-hidden relative">
@@ -450,58 +534,130 @@ const App = () => {
           </div>
         </div>
 
+        {/* Input Mode Toggle */}
+        <div className="flex items-center justify-center mb-6">
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-full p-1 border border-slate-600/50">
+            <button
+              onClick={toggleInputMode}
+              className={`flex items-center px-4 py-2 rounded-full text-sm transition-all duration-300 ${
+                inputMode === 'voice' 
+                  ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              <Mic className="w-4 h-4 mr-2" />
+              Voice
+            </button>
+            <button
+              onClick={toggleInputMode}
+              className={`flex items-center px-4 py-2 rounded-full text-sm transition-all duration-300 ${
+                inputMode === 'text' 
+                  ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              <Keyboard className="w-4 h-4 mr-2" />
+              Text
+            </button>
+          </div>
+        </div>
+
         {/* Controls */}
         <div className="space-y-4">
-          <div className="flex items-center justify-center space-x-4">
-            <button
-              onClick={handleMicClick}
-              disabled={isProcessing}
-              className={`
-                group relative inline-flex items-center px-6 sm:px-8 py-3 sm:py-4
-                font-semibold text-sm sm:text-base rounded-full 
-                transform transition-all duration-300 
-                hover:scale-105 hover:shadow-2xl
-                active:scale-95 focus:outline-none focus:ring-4 focus:ring-purple-300
-                disabled:opacity-50 disabled:cursor-not-allowed
-                ${isListening 
-                  ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white animate-pulse shadow-lg shadow-green-500/50' 
-                  : isProcessing 
-                  ? 'bg-gradient-to-r from-yellow-500 to-orange-600 text-white animate-pulse shadow-lg shadow-yellow-500/50'
-                  : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-purple-500/50'
-                }
-              `}
-            >
-              <span className="relative mr-2 sm:mr-3">
-                {isListening ? 'Listening...' : 
-                 isProcessing ? 'Processing...' : 
-                 'Start Voice Chat'}
-              </span>
-              
-              <div className="relative">
-                {isListening ? (
-                  <MicOff className="w-4 h-4 sm:w-5 sm:h-5" />
-                ) : (
-                  <Mic className="w-4 h-4 sm:w-5 sm:h-5" />
-                )}
+          {inputMode === 'voice' ? (
+            <div className="flex items-center justify-center space-x-4">
+              <button
+                onClick={handleMicClick}
+                disabled={isProcessing}
+                className={`
+                  group relative inline-flex items-center px-6 sm:px-8 py-3 sm:py-4
+                  font-semibold text-sm sm:text-base rounded-full 
+                  transform transition-all duration-300 
+                  hover:scale-105 hover:shadow-2xl
+                  active:scale-95 focus:outline-none focus:ring-4 focus:ring-purple-300
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  ${isListening 
+                    ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white animate-pulse shadow-lg shadow-green-500/50' 
+                    : isProcessing 
+                    ? 'bg-gradient-to-r from-yellow-500 to-orange-600 text-white animate-pulse shadow-lg shadow-yellow-500/50'
+                    : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-purple-500/50'
+                  }
+                `}
+              >
+                <span className="relative mr-2 sm:mr-3">
+                  {isListening ? 'Listening...' : 
+                   isProcessing ? 'Processing...' : 
+                   'Start Voice Chat'}
+                </span>
                 
-                {isListening && (
-                  <>
-                    <div className="absolute inset-0 rounded-full border-2 border-green-300 opacity-75 animate-ping"></div>
-                    <div className="absolute inset-0 rounded-full border-2 border-emerald-300 opacity-50 animate-ping delay-150"></div>
-                  </>
+                <div className="relative">
+                  {isListening ? (
+                    <MicOff className="w-4 h-4 sm:w-5 sm:h-5" />
+                  ) : (
+                    <Mic className="w-4 h-4 sm:w-5 sm:h-5" />
+                  )}
+                  
+                  {isListening && (
+                    <>
+                      <div className="absolute inset-0 rounded-full border-2 border-green-300 opacity-75 animate-ping"></div>
+                      <div className="absolute inset-0 rounded-full border-2 border-emerald-300 opacity-50 animate-ping delay-150"></div>
+                    </>
+                  )}
+                </div>
+              </button>
+
+              {(transcript || response) && (
+                <button
+                  onClick={clearConversation}
+                  className="px-4 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-full transition-all duration-300 hover:scale-105 shadow-lg text-sm"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          ) : (
+            <form onSubmit={handleTextSubmit} className="space-y-4">
+              <div className="relative max-w-md mx-auto">
+                <input
+                  ref={textInputRef}
+                  type="text"
+                  value={textInput}
+                  onChange={(e) => setTextInput(e.target.value)}
+                  placeholder="Type your message here..."
+                  disabled={isProcessing}
+                  className="w-full px-4 py-3 pr-12 bg-slate-800/80 border border-slate-600/50 rounded-full text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all duration-300 disabled:opacity-50"
+                />
+                <button
+                  type="submit"
+                  disabled={!textInput.trim() || isProcessing}
+                  className="absolute right-2 top-1/2 transform -translate-y-1/2 p-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-full transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-center space-x-4">
+                <button
+                  type="button"
+                  onClick={() => setShowKeywords(!showKeywords)}
+                  className="px-4 py-2 bg-slate-700/50 hover:bg-slate-600/50 text-slate-300 hover:text-white rounded-full transition-all duration-300 text-sm border border-slate-600/30"
+                >
+                  <Lightbulb className="w-4 h-4 mr-2 inline" />
+                  {showKeywords ? 'Hide' : 'Show'} Suggestions
+                </button>
+                
+                {(transcript || response) && (
+                  <button
+                    type="button"
+                    onClick={clearConversation}
+                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-full transition-all duration-300 hover:scale-105 shadow-lg text-sm"
+                  >
+                    Clear
+                  </button>
                 )}
               </div>
-            </button>
-
-            {(transcript || response) && (
-              <button
-                onClick={clearConversation}
-                className="px-4 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-full transition-all duration-300 hover:scale-105 shadow-lg text-sm"
-              >
-                Clear
-              </button>
-            )}
-          </div>
+            </form>
+          )}
 
           {/* Status indicator */}
           <div className={`
@@ -513,6 +669,8 @@ const App = () => {
               ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
               : isSpeaking
               ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+              : inputMode === 'text'
+              ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
               : 'bg-slate-800/50 text-slate-400 border border-slate-700/50'
             }
           `}>
@@ -521,11 +679,13 @@ const App = () => {
               ${isListening ? 'bg-green-400 animate-pulse' : 
                 isProcessing ? 'bg-yellow-400 animate-pulse' :
                 isSpeaking ? 'bg-red-400 animate-pulse' :
+                inputMode === 'text' ? 'bg-blue-400' :
                 'bg-slate-500'}
             `}></div>
             {isListening ? 'Listening for your voice...' : 
              isProcessing ? 'AI is thinking...' :
              isSpeaking ? 'AI is speaking...' :
+             inputMode === 'text' ? 'Ready to type your message' :
              'Ready to chat'}
           </div>
 
@@ -536,6 +696,14 @@ const App = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Keywords/Suggestions */}
+      <div className="relative z-10">
+        <KeywordSuggestions 
+          onKeywordClick={handleKeywordClick}
+          visible={showKeywords}
+        />
       </div>
 
       {/* Response Display Component */}
