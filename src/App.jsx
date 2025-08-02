@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Sparkles, Brain, Zap, Volume2, VolumeX, Copy, Check, Code, MessageSquare, Send, Keyboard, Lightbulb } from 'lucide-react';
+import { Mic, MicOff, Sparkles, Brain, Zap, Volume2, VolumeX, Copy, Check, Code, MessageSquare, Send, Keyboard, Lightbulb, AlertCircle, Smartphone } from 'lucide-react';
 
 const CodeBlock = ({ children, language = 'javascript' }) => {
   const [copied, setCopied] = useState(false);
@@ -162,6 +162,30 @@ const ResponseDisplay = ({ transcript, response, isSpeaking, onStopSpeaking }) =
   );
 };
 
+// Compatibility Info Component
+const CompatibilityInfo = ({ speechSupported, isIOS, isMobile }) => {
+  if (speechSupported && !isIOS) return null;
+
+  return (
+    <div className="w-full max-w-md mx-auto mb-4 bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-3">
+      <div className="flex items-start space-x-2">
+        <AlertCircle className="w-5 h-5 text-yellow-400 mt-0.5 flex-shrink-0" />
+        <div>
+          <p className="text-yellow-300 text-sm font-medium mb-1">
+            {isIOS ? 'iOS Safari Required' : 'Voice Not Available'}
+          </p>
+          <p className="text-yellow-200 text-xs">
+            {isIOS 
+              ? 'Voice recognition works best in Safari on iOS devices. Please use Safari for voice features.'
+              : 'Voice recognition is not supported in this browser. Please use text mode or switch to Chrome/Safari.'
+            }
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Keywords/Suggestions Component
 const KeywordSuggestions = ({ onKeywordClick, visible }) => {
   const keywords = [
@@ -235,7 +259,10 @@ const App = () => {
   const [response, setResponse] = useState('');
   const [error, setError] = useState('');
   const [showKeywords, setShowKeywords] = useState(false);
-  const [inputMode, setInputMode] = useState('voice'); // 'voice' or 'text'
+  const [inputMode, setInputMode] = useState('text'); // Default to text for better compatibility
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   
   const recognitionRef = useRef(null);
   const speechSynthesisRef = useRef(null);
@@ -243,6 +270,36 @@ const App = () => {
 
   const API_KEY = "AIzaSyBC7Sw3P7Z5R-z4L9-5VcvN8Zj2NEWD7OE";
   const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
+
+  // Device detection
+  useEffect(() => {
+    const userAgent = navigator.userAgent.toLowerCase();
+    const isIOSDevice = /iphone|ipad|ipod/.test(userAgent);
+    const isMobileDevice = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/.test(userAgent);
+    
+    setIsIOS(isIOSDevice);
+    setIsMobile(isMobileDevice);
+    
+    // Check speech recognition support with better detection
+    const speechRecognitionSupported = (
+      ('webkitSpeechRecognition' in window) ||
+      ('SpeechRecognition' in window)
+    );
+    
+    setSpeechSupported(speechRecognitionSupported);
+    
+    // For iOS, default to voice if in Safari, otherwise text
+    if (isIOSDevice) {
+      const isSafari = /safari/.test(userAgent) && !/chrome|crios|fxios/.test(userAgent);
+      setInputMode(isSafari && speechRecognitionSupported ? 'voice' : 'text');
+    } else if (speechRecognitionSupported) {
+      // For non-iOS devices with speech support, default to voice
+      setInputMode('voice');
+    } else {
+      // For devices without speech support, default to text
+      setInputMode('text');
+    }
+  }, []);
 
   // Animated text effect
   const [textIndex, setTextIndex] = useState(0);
@@ -261,14 +318,19 @@ const App = () => {
     return () => clearInterval(interval);
   }, [texts.length]);
 
-  // Initialize speech recognition
+  // Initialize speech recognition with better error handling
   useEffect(() => {
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+    if (!speechSupported) return;
+
+    try {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
+      
+      // Better configuration for mobile compatibility
       recognitionRef.current.continuous = false;
       recognitionRef.current.interimResults = true;
       recognitionRef.current.lang = 'en-US';
+      recognitionRef.current.maxAlternatives = 1;
 
       recognitionRef.current.onstart = () => {
         setError('');
@@ -309,25 +371,33 @@ const App = () => {
         
         switch(event.error) {
           case 'not-allowed':
-            setError('Microphone access denied. Please allow microphone permission in your browser settings.');
+            setError('Microphone access denied. Please allow microphone permission and try again.');
             break;
           case 'no-speech':
-            setError('No speech detected. Please try speaking again.');
+            setError('No speech detected. Please try speaking again or use text mode.');
             break;
           case 'network':
             setError('Network error. Please check your internet connection.');
             break;
           case 'audio-capture':
-            setError('No microphone found. Please connect a microphone.');
+            setError('No microphone found. Please connect a microphone or use text mode.');
+            break;
+          case 'service-not-allowed':
+            setError('Speech service not allowed. Please use text mode.');
+            break;
+          case 'aborted':
+            // Don't show error for user-initiated stops
             break;
           default:
-            setError(`Speech recognition error: ${event.error}`);
+            setError(`Speech recognition error: ${event.error}. Please try text mode.`);
         }
       };
-    } else {
-      setError('Speech recognition not supported in this browser. Please use Chrome, Edge, or Safari.');
+    } catch (error) {
+      console.error('Failed to initialize speech recognition:', error);
+      setSpeechSupported(false);
+      setInputMode('text');
     }
-  }, []);
+  }, [speechSupported]);
 
   const sendToGemini = async (message) => {
     setIsProcessing(true);
@@ -361,7 +431,11 @@ const App = () => {
       if (data.candidates && data.candidates[0] && data.candidates[0].content) {
         const aiResponse = data.candidates[0].content.parts[0].text;
         setResponse(aiResponse);
-        speakResponse(aiResponse);
+        
+        // Only speak on non-mobile or when explicitly requested
+        if (!isMobile || window.speechSynthesis) {
+          speakResponse(aiResponse);
+        }
       } else {
         throw new Error('Invalid response format from Gemini AI');
       }
@@ -374,7 +448,9 @@ const App = () => {
   };
 
   const speakResponse = (text) => {
-    if ('speechSynthesis' in window) {
+    if (!('speechSynthesis' in window)) return;
+
+    try {
       window.speechSynthesis.cancel();
       
       // Remove code blocks from speech
@@ -385,12 +461,29 @@ const App = () => {
       utterance.pitch = 1;
       utterance.volume = 1;
       
+      // Better voice selection for different platforms
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        const preferredVoice = voices.find(voice => 
+          voice.lang.startsWith('en') && 
+          (voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.default)
+        );
+        if (preferredVoice) {
+          utterance.voice = preferredVoice;
+        }
+      }
+      
       utterance.onstart = () => setIsSpeaking(true);
       utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
+      utterance.onerror = (event) => {
+        console.error('Speech synthesis error:', event);
+        setIsSpeaking(false);
+      };
       
       speechSynthesisRef.current = utterance;
       window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.error('Failed to speak response:', error);
     }
   };
 
@@ -402,11 +495,17 @@ const App = () => {
   };
 
   const handleMicClick = async () => {
+    if (!speechSupported) {
+      setError('Speech recognition not supported. Please use text mode.');
+      return;
+    }
+
     if (isListening) {
       recognitionRef.current?.stop();
       setIsListening(false);
     } else if (recognitionRef.current) {
       try {
+        // Request microphone permission first
         await navigator.mediaDevices.getUserMedia({ audio: true });
         
         setResponse('');
@@ -414,8 +513,18 @@ const App = () => {
         setError('');
         setInputMode('voice');
         setShowKeywords(false);
-        recognitionRef.current.start();
-        setIsListening(true);
+        
+        // Add delay for better mobile compatibility
+        setTimeout(() => {
+          try {
+            recognitionRef.current.start();
+            setIsListening(true);
+          } catch (error) {
+            console.error('Failed to start recognition:', error);
+            setError('Failed to start voice recognition. Please try again or use text mode.');
+          }
+        }, 100);
+        
       } catch (permissionError) {
         setError('Microphone permission denied. Please allow microphone access and try again.');
         console.error('Microphone permission error:', permissionError);
@@ -442,9 +551,15 @@ const App = () => {
   };
 
   const toggleInputMode = () => {
+    if (!speechSupported && inputMode === 'text') {
+      setError('Speech recognition not supported in this browser.');
+      return;
+    }
+
     const newMode = inputMode === 'voice' ? 'text' : 'voice';
     setInputMode(newMode);
     setShowKeywords(newMode === 'text' && !transcript && !response);
+    setError(''); // Clear any previous errors
   };
 
   const clearConversation = () => {
@@ -454,6 +569,12 @@ const App = () => {
     setError('');
     setShowKeywords(inputMode === 'text');
     stopSpeaking();
+    
+    // Stop any ongoing recognition
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    }
   };
 
   useEffect(() => {
@@ -532,21 +653,40 @@ const App = () => {
               {texts[textIndex]}
             </p>
           </div>
+          
+          {/* Device indicator */}
+          {isMobile && (
+            <div className="flex items-center justify-center mt-2">
+              <Smartphone className="w-4 h-4 text-slate-400 mr-2" />
+              <span className="text-xs text-slate-400">Mobile Device Detected</span>
+            </div>
+          )}
         </div>
+
+        {/* Compatibility Info */}
+        <CompatibilityInfo 
+          speechSupported={speechSupported}
+          isIOS={isIOS}
+          isMobile={isMobile}
+        />
 
         {/* Input Mode Toggle */}
         <div className="flex items-center justify-center mb-6">
           <div className="bg-slate-800/50 backdrop-blur-sm rounded-full p-1 border border-slate-600/50">
             <button
               onClick={toggleInputMode}
+              disabled={!speechSupported && inputMode === 'text'}
               className={`flex items-center px-4 py-2 rounded-full text-sm transition-all duration-300 ${
                 inputMode === 'voice' 
                   ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg'
-                  : 'text-slate-300 hover:text-white'
+                  : speechSupported
+                  ? 'text-slate-300 hover:text-white'
+                  : 'text-slate-500 cursor-not-allowed'
               }`}
             >
               <Mic className="w-4 h-4 mr-2" />
               Voice
+              {!speechSupported && <span className="ml-1 text-xs">(N/A)</span>}
             </button>
             <button
               onClick={toggleInputMode}
@@ -565,10 +705,10 @@ const App = () => {
         {/* Controls */}
         <div className="space-y-4">
           {inputMode === 'voice' ? (
-            <div className="flex items-center justify-center space-x-4">
+            <div className="flex flex-col items-center space-y-4">
               <button
                 onClick={handleMicClick}
-                disabled={isProcessing}
+                disabled={isProcessing || !speechSupported}
                 className={`
                   group relative inline-flex items-center px-6 sm:px-8 py-3 sm:py-4
                   font-semibold text-sm sm:text-base rounded-full 
@@ -580,14 +720,16 @@ const App = () => {
                     ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white animate-pulse shadow-lg shadow-green-500/50' 
                     : isProcessing 
                     ? 'bg-gradient-to-r from-yellow-500 to-orange-600 text-white animate-pulse shadow-lg shadow-yellow-500/50'
-                    : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-purple-500/50'
+                    : speechSupported
+                    ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-purple-500/50'
+                    : 'bg-slate-600 text-slate-300 cursor-not-allowed'
                   }
                 `}
               >
                 <span className="relative mr-2 sm:mr-3">
                   {isListening ? 'Listening...' : 
                    isProcessing ? 'Processing...' : 
-                   'Start Voice Chat'}
+                   speechSupported ? 'Start Voice Chat' : 'Voice Unavailable'}
                 </span>
                 
                 <div className="relative">
@@ -606,12 +748,22 @@ const App = () => {
                 </div>
               </button>
 
+              {/* Voice help text */}
+              {speechSupported && (
+                <p className="text-xs text-slate-400 text-center max-w-sm">
+                  {isIOS 
+                    ? 'Works best in Safari. Tap the button and speak clearly.' 
+                    : 'Click the button and speak clearly. Your browser will ask for microphone permission.'
+                  }
+                </p>
+              )}
+
               {(transcript || response) && (
                 <button
                   onClick={clearConversation}
-                  className="px-4 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-full transition-all duration-300 hover:scale-105 shadow-lg text-sm"
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-full transition-all duration-300 hover:scale-105 shadow-lg text-sm"
                 >
-                  Clear
+                  Clear Conversation
                 </button>
               )}
             </div>
@@ -636,7 +788,7 @@ const App = () => {
                 </button>
               </div>
               
-              <div className="flex items-center justify-center space-x-4">
+              <div className="flex flex-wrap items-center justify-center gap-2">
                 <button
                   type="button"
                   onClick={() => setShowKeywords(!showKeywords)}
@@ -652,7 +804,7 @@ const App = () => {
                     onClick={clearConversation}
                     className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-full transition-all duration-300 hover:scale-105 shadow-lg text-sm"
                   >
-                    Clear
+                    Clear Conversation
                   </button>
                 )}
               </div>
@@ -671,7 +823,9 @@ const App = () => {
               ? 'bg-red-500/20 text-red-300 border border-red-500/30'
               : inputMode === 'text'
               ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-              : 'bg-slate-800/50 text-slate-400 border border-slate-700/50'
+              : speechSupported
+              ? 'bg-slate-800/50 text-slate-400 border border-slate-700/50'
+              : 'bg-orange-500/20 text-orange-300 border border-orange-500/30'
             }
           `}>
             <div className={`
@@ -680,19 +834,22 @@ const App = () => {
                 isProcessing ? 'bg-yellow-400 animate-pulse' :
                 isSpeaking ? 'bg-red-400 animate-pulse' :
                 inputMode === 'text' ? 'bg-blue-400' :
-                'bg-slate-500'}
+                speechSupported ? 'bg-slate-500' : 'bg-orange-400'}
             `}></div>
             {isListening ? 'Listening for your voice...' : 
              isProcessing ? 'AI is thinking...' :
              isSpeaking ? 'AI is speaking...' :
              inputMode === 'text' ? 'Ready to type your message' :
-             'Ready to chat'}
+             speechSupported ? 'Ready to chat' : 'Text mode only'}
           </div>
 
           {/* Error Display */}
           {error && (
             <div className="bg-red-900/20 border border-red-500/30 rounded-lg p-3 sm:p-4 max-w-md mx-auto">
-              <p className="text-red-300 text-sm">{error}</p>
+              <div className="flex items-start space-x-2">
+                <AlertCircle className="w-5 h-5 text-red-400 mt-0.5 flex-shrink-0" />
+                <p className="text-red-300 text-sm">{error}</p>
+              </div>
             </div>
           )}
         </div>
@@ -727,6 +884,21 @@ const App = () => {
         }
         .animate-spin-slow {
           animation: spin-slow 20s linear infinite;
+        }
+        
+        /* Mobile optimization */
+        @media (max-width: 640px) {
+          .prose p {
+            font-size: 14px;
+            line-height: 1.5;
+          }
+        }
+        
+        /* Prevent zoom on iOS when focusing inputs */
+        @media screen and (-webkit-min-device-pixel-ratio: 0) {
+          input[type="text"] {
+            font-size: 16px;
+          }
         }
       `}</style>
     </div>
