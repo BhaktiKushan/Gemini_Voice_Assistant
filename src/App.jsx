@@ -164,7 +164,12 @@ const ResponseDisplay = ({ transcript, response, isSpeaking, onStopSpeaking }) =
 
 // Compatibility Info Component
 const CompatibilityInfo = ({ speechSupported, isIOS, isMobile }) => {
-  if (speechSupported && !isIOS) return null;
+  const userAgent = navigator.userAgent.toLowerCase();
+  const isAndroid = /android/.test(userAgent);
+  const isChrome = /chrome/.test(userAgent) && !/edg/.test(userAgent);
+  const isSecure = location.protocol === 'https:' || location.hostname === 'localhost';
+
+  if (speechSupported && !isIOS && !(isAndroid && !isChrome)) return null;
 
   return (
     <div className="w-full max-w-md mx-auto mb-4 bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-3">
@@ -172,12 +177,23 @@ const CompatibilityInfo = ({ speechSupported, isIOS, isMobile }) => {
         <AlertCircle className="w-5 h-5 text-yellow-400 mt-0.5 flex-shrink-0" />
         <div>
           <p className="text-yellow-300 text-sm font-medium mb-1">
-            {isIOS ? 'iOS Safari Required' : 'Voice Not Available'}
+            {isIOS 
+              ? 'iOS Safari Required' 
+              : isAndroid && !isChrome
+              ? 'Chrome Required for Voice'
+              : isAndroid && !isSecure
+              ? 'HTTPS Required for Voice'
+              : 'Voice Not Available'
+            }
           </p>
           <p className="text-yellow-200 text-xs">
             {isIOS 
               ? 'Voice recognition works best in Safari on iOS devices. Please use Safari for voice features.'
-              : 'Voice recognition is not supported in this browser. Please use text mode or switch to Chrome/Safari.'
+              : isAndroid && !isChrome
+              ? 'Voice recognition requires Google Chrome on Android. Please open this page in Chrome.'
+              : isAndroid && !isSecure
+              ? 'Voice recognition requires a secure connection (HTTPS). Please use a secure connection.'
+              : 'Voice recognition is not supported in this browser. Please use text mode or switch to Chrome.'
             }
           </p>
         </div>
@@ -276,27 +292,49 @@ const App = () => {
     const userAgent = navigator.userAgent.toLowerCase();
     const isIOSDevice = /iphone|ipad|ipod/.test(userAgent);
     const isMobileDevice = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/.test(userAgent);
+    const isAndroid = /android/.test(userAgent);
+    const isChrome = /chrome/.test(userAgent) && !/edg/.test(userAgent);
     
     setIsIOS(isIOSDevice);
     setIsMobile(isMobileDevice);
     
-    // Check speech recognition support with better detection
-    const speechRecognitionSupported = (
-      ('webkitSpeechRecognition' in window) ||
-      ('SpeechRecognition' in window)
-    );
+    // Enhanced speech recognition detection for Android
+    let speechRecognitionSupported = false;
+    
+    if ('webkitSpeechRecognition' in window) {
+      speechRecognitionSupported = true;
+    } else if ('SpeechRecognition' in window) {
+      speechRecognitionSupported = true;
+    }
+    
+    // Special handling for Android devices
+    if (isAndroid) {
+      // Android requires Chrome and secure context (HTTPS)
+      const isSecure = location.protocol === 'https:' || location.hostname === 'localhost';
+      speechRecognitionSupported = speechRecognitionSupported && isChrome && isSecure;
+      
+      console.log('Android detection:', {
+        isChrome,
+        isSecure,
+        speechSupported: speechRecognitionSupported,
+        userAgent
+      });
+    }
     
     setSpeechSupported(speechRecognitionSupported);
     
-    // For iOS, default to voice if in Safari, otherwise text
+    // Smart default mode selection
     if (isIOSDevice) {
       const isSafari = /safari/.test(userAgent) && !/chrome|crios|fxios/.test(userAgent);
       setInputMode(isSafari && speechRecognitionSupported ? 'voice' : 'text');
+    } else if (isAndroid && speechRecognitionSupported) {
+      // For Android with speech support, default to voice
+      setInputMode('voice');
     } else if (speechRecognitionSupported) {
-      // For non-iOS devices with speech support, default to voice
+      // For other devices with speech support
       setInputMode('voice');
     } else {
-      // For devices without speech support, default to text
+      // Fallback to text mode
       setInputMode('text');
     }
   }, []);
@@ -326,11 +364,17 @@ const App = () => {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
       
-      // Better configuration for mobile compatibility
+      // Android-optimized configuration
       recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = true;
+      recognitionRef.current.interimResults = false; // Disabled for Android stability
       recognitionRef.current.lang = 'en-US';
       recognitionRef.current.maxAlternatives = 1;
+      
+      // Android-specific settings
+      if (/android/.test(navigator.userAgent.toLowerCase())) {
+        recognitionRef.current.grammars = null; // Clear grammars for Android
+        recognitionRef.current.serviceURI = null; // Use default service
+      }
 
       recognitionRef.current.onstart = () => {
         setError('');
@@ -339,22 +383,25 @@ const App = () => {
       };
 
       recognitionRef.current.onresult = (event) => {
-        let interimTranscript = '';
+        console.log('Speech recognition result:', event);
+        
         let finalTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript;
+        
+        // Process all results
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.isFinal) {
+            finalTranscript += result[0].transcript;
           } else {
-            interimTranscript += transcript;
+            // For Android, also use non-final results if they're confident enough
+            if (result[0].confidence > 0.7) {
+              finalTranscript += result[0].transcript;
+            }
           }
         }
 
-        const currentTranscript = finalTranscript || interimTranscript;
-        setTranscript(currentTranscript);
-        
         if (finalTranscript.trim()) {
+          setTranscript(finalTranscript.trim());
           setIsListening(false);
           sendToGemini(finalTranscript.trim());
         }
@@ -363,39 +410,75 @@ const App = () => {
       recognitionRef.current.onend = () => {
         console.log('Speech recognition ended');
         setIsListening(false);
+        
+        // Auto-restart if no transcript was captured (Android fix)
+        if (!transcript && isListening) {
+          setTimeout(() => {
+            if (recognitionRef.current && isListening) {
+              try {
+                recognitionRef.current.start();
+              } catch (e) {
+                console.log('Auto-restart failed:', e);
+                setIsListening(false);
+              }
+            }
+          }, 100);
+        }
       };
 
       recognitionRef.current.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
+        console.error('Speech recognition error:', event.error, event);
         setIsListening(false);
         
         switch(event.error) {
           case 'not-allowed':
-            setError('Microphone access denied. Please allow microphone permission and try again.');
+            setError('🎤 Microphone access denied. Please allow microphone permission in Chrome settings and try again.');
             break;
           case 'no-speech':
-            setError('No speech detected. Please try speaking again or use text mode.');
+            setError('🔇 No speech detected. Please speak clearly and try again.');
             break;
           case 'network':
-            setError('Network error. Please check your internet connection.');
+            setError('🌐 Network error. Please check your internet connection and try again.');
             break;
           case 'audio-capture':
-            setError('No microphone found. Please connect a microphone or use text mode.');
+            setError('🎤 No microphone found. Please connect a microphone or check your device settings.');
             break;
           case 'service-not-allowed':
-            setError('Speech service not allowed. Please use text mode.');
+            setError('🚫 Speech service not available. Please ensure you\'re using Chrome and have a stable internet connection.');
             break;
           case 'aborted':
             // Don't show error for user-initiated stops
+            console.log('Speech recognition aborted by user');
+            break;
+          case 'language-not-supported':
+            setError('🌍 Language not supported. Trying with default language...');
+            // Try again with a different language setting
+            setTimeout(() => setError(''), 2000);
             break;
           default:
-            setError(`Speech recognition error: ${event.error}. Please try text mode.`);
+            setError(`❌ Speech error: ${event.error}. Please try again or use text mode.`);
         }
       };
+
+      recognitionRef.current.onspeechstart = () => {
+        console.log('Speech started');
+        setError(''); // Clear any previous errors
+      };
+
+      recognitionRef.current.onspeechend = () => {
+        console.log('Speech ended');
+      };
+
+      recognitionRef.current.onnomatch = () => {
+        console.log('No speech match');
+        setError('🤔 Could not understand. Please speak more clearly and try again.');
+      };
+
     } catch (error) {
       console.error('Failed to initialize speech recognition:', error);
       setSpeechSupported(false);
       setInputMode('text');
+      setError('❌ Speech recognition initialization failed. Using text mode.');
     }
   }, [speechSupported]);
 
@@ -496,38 +579,71 @@ const App = () => {
 
   const handleMicClick = async () => {
     if (!speechSupported) {
-      setError('Speech recognition not supported. Please use text mode.');
+      setError('🚫 Speech recognition not supported. Please use text mode.');
       return;
     }
 
     if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
+      try {
+        recognitionRef.current?.stop();
+        setIsListening(false);
+      } catch (error) {
+        console.error('Error stopping recognition:', error);
+        setIsListening(false);
+      }
     } else if (recognitionRef.current) {
       try {
-        // Request microphone permission first
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-        
+        // Clear previous states
         setResponse('');
         setTranscript('');
         setError('');
         setInputMode('voice');
         setShowKeywords(false);
-        
-        // Add delay for better mobile compatibility
-        setTimeout(() => {
-          try {
-            recognitionRef.current.start();
-            setIsListening(true);
-          } catch (error) {
-            console.error('Failed to start recognition:', error);
-            setError('Failed to start voice recognition. Please try again or use text mode.');
+
+        // Request microphone permission explicitly for Android
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
           }
-        }, 100);
+        });
+        
+        // Stop the stream immediately (we just needed permission)
+        stream.getTracks().forEach(track => track.stop());
+        
+        console.log('Microphone permission granted, starting recognition...');
+        
+        // Add a small delay for Android compatibility
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Set listening state before starting
+        setIsListening(true);
+        
+        // Start recognition
+        recognitionRef.current.start();
+        
+        console.log('Speech recognition started successfully');
+        
+        // Provide user feedback
+        setError('🎤 Listening... Speak now!');
+        setTimeout(() => {
+          if (isListening) setError('');
+        }, 2000);
         
       } catch (permissionError) {
-        setError('Microphone permission denied. Please allow microphone access and try again.');
         console.error('Microphone permission error:', permissionError);
+        setIsListening(false);
+        
+        if (permissionError.name === 'NotAllowedError') {
+          setError('🔒 Microphone access denied. Please enable microphone permission in your browser settings and refresh the page.');
+        } else if (permissionError.name === 'NotFoundError') {
+          setError('🎤 No microphone found. Please connect a microphone and try again.');
+        } else if (permissionError.name === 'NotSupportedError') {
+          setError('🚫 Microphone not supported on this device. Please use text mode.');
+        } else {
+          setError(`❌ Microphone error: ${permissionError.message}. Please try again or use text mode.`);
+        }
       }
     }
   };
@@ -753,6 +869,8 @@ const App = () => {
                 <p className="text-xs text-slate-400 text-center max-w-sm">
                   {isIOS 
                     ? 'Works best in Safari. Tap the button and speak clearly.' 
+                    : /android/.test(navigator.userAgent.toLowerCase())
+                    ? 'Ensure Chrome browser and microphone permission. Tap button and speak clearly after the beep.'
                     : 'Click the button and speak clearly. Your browser will ask for microphone permission.'
                   }
                 </p>
